@@ -25,6 +25,17 @@ export function timeAgo(date: Date): string {
   return `${Math.floor(months / 12)}y ago`;
 }
 
+/** Initials for avatars, e.g. ("Ada Lovelace", …) → "AL"; falls back to the email. */
+export function initials(name: string | null, email: string): string {
+  const source = name?.trim() || email;
+  return source
+    .split(/[\s@._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]!.toUpperCase())
+    .join("");
+}
+
 export function formatDate(date: Date): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }

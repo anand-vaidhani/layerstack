@@ -82,7 +82,7 @@ export async function manageBillingAction(): Promise<ActionResult<{ url?: string
     return {
       ok: false,
       code: "STRIPE_REQUIRED",
-      error: "Stripe is not configured yet — set STRIPE_SECRET_KEY and STRIPE_PRICE_ID_PRO to enable the customer portal.",
+      error: "This is a project for portfolio. So, I haven't enabled the payment feature.",
     };
   }
   if (!ctx.org.stripeCustomerId) {

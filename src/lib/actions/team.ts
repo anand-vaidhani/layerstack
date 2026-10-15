@@ -1,8 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { requireOrgContext, type SessionContext } from "@/lib/auth";
+import { getCurrentUser, requireOrgContext, type SessionContext } from "@/lib/auth";
+import { consumeInvite, findInvite } from "@/lib/invites";
 import { parseForm, type ActionResult } from "@/lib/result";
 import { changeRoleSchema, inviteMemberSchema, removeMemberSchema } from "@/lib/schemas";
 import { canAddMember, PLANS } from "@/lib/plans";
@@ -20,7 +22,9 @@ async function countPendingInvites(ctx: SessionContext): Promise<number> {
   });
 }
 
-export async function inviteMemberAction(formData: FormData): Promise<ActionResult<{ email: string }>> {
+export async function inviteMemberAction(
+  formData: FormData,
+): Promise<ActionResult<{ email: string; token: string }>> {
   const ctx = await requireOrgContext();
   if (ctx.role === "MEMBER") {
     return { ok: false, code: "FORBIDDEN", error: "You need admin access to invite teammates" };
@@ -57,7 +61,7 @@ export async function inviteMemberAction(formData: FormData): Promise<ActionResu
     return { ok: false, code: "CONFLICT", error: "That person already has a pending invitation" };
   }
 
-  await db.invitation.create({
+  const invitation = await db.invitation.create({
     data: {
       email: parsed.data.email,
       role: parsed.data.role,
@@ -74,7 +78,53 @@ export async function inviteMemberAction(formData: FormData): Promise<ActionResu
   });
 
   revalidatePath("/dashboard", "layout");
-  return { ok: true, message: `Invitation sent to ${parsed.data.email}`, data: { email: parsed.data.email } };
+  return {
+    ok: true,
+    message: `Invitation sent to ${parsed.data.email}`,
+    data: { email: parsed.data.email, token: invitation.token },
+  };
+}
+
+/**
+ * Accepts a team invitation from its shareable link (`/invite/[token]`).
+ * The signed-in account must match the invited email address; on success the
+ * invitation is consumed, membership created and the active org switched.
+ */
+export async function acceptInviteAction(token: string): Promise<ActionResult> {
+  const invite = await findInvite(token);
+  if (!invite) {
+    return { ok: false, code: "NOT_FOUND", error: "This invitation link is not valid" };
+  }
+  if (invite.expiresAt <= new Date()) {
+    await db.invitation.delete({ where: { id: invite.id } });
+    return {
+      ok: false,
+      code: "NOT_FOUND",
+      error: "This invitation has expired. Ask an owner or admin to send a new one.",
+    };
+  }
+
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, code: "AUTH", error: "Sign in to accept this invitation" };
+  if (user.email.toLowerCase() !== invite.email.toLowerCase()) {
+    return {
+      ok: false,
+      code: "FORBIDDEN",
+      error: `This invitation was sent to ${invite.email}. Sign in with that account to accept it.`,
+    };
+  }
+
+  const consumed = await consumeInvite(invite, user);
+  if (!consumed.ok) {
+    return {
+      ok: false,
+      code: "PLAN_LIMIT",
+      limit: "members",
+      error: `${consumed.error} Upgrade to Pro to accept this invitation.`,
+    };
+  }
+  revalidatePath("/dashboard", "layout");
+  redirect("/dashboard");
 }
 
 export async function changeRoleAction(formData: FormData): Promise<ActionResult> {

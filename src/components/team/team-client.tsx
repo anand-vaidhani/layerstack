@@ -1,80 +1,23 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { MailPlus, UserMinus, UserPlus, X } from "lucide-react";
+import { MailPlus } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { RoleBadge } from "@/components/shared/badges";
 import { UpgradeDialog } from "@/components/shared/upgrade-dialog";
 import { PageHeader } from "@/components/shared/page-header";
 import { changeRoleAction, inviteMemberAction, removeMemberAction, revokeInviteAction } from "@/lib/actions/team";
 import { handleActionResult } from "@/lib/toast";
-import { timeAgo } from "@/lib/format";
+import { canInvite } from "./permissions";
+import { InviteDialog } from "./invite-dialog";
+import { RemoveMemberDialog } from "./remove-member-dialog";
+import { SeatLimitBanner } from "./seat-limit-banner";
+import { TeamTable } from "./team-table";
 import type { Role } from "@/generated/prisma/client";
+import type { MemberRow, TeamRow } from "./types";
 
-export type TeamRow =
-  | {
-      kind: "member";
-      id: string;
-      name: string | null;
-      email: string;
-      role: Role;
-      isSelf: boolean;
-      lastSignInAt: string | null;
-    }
-  | {
-      kind: "invite";
-      id: string;
-      email: string;
-      role: Role;
-      expiresAt: string;
-    };
-
-function initials(name: string | null, email: string): string {
-  const source = name?.trim() || email;
-  return source
-    .split(/[\s@._-]+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((p) => p[0]!.toUpperCase())
-    .join("");
-}
+export type { TeamRow } from "./types";
 
 type TeamClientProps = {
   rows: TeamRow[];
@@ -98,13 +41,12 @@ export function TeamClient({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteRole, setInviteRole] = useState<"ADMIN" | "MEMBER">("MEMBER");
+  const [inviteFormKey, setInviteFormKey] = useState(0);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<string | undefined>(undefined);
   const [removeTarget, setRemoveTarget] = useState<{ id: string; email: string } | null>(null);
-  const inviteFormRef = useRef<HTMLFormElement>(null);
 
-  const canInvite = viewerRole !== "MEMBER";
+  const inviteAllowed = canInvite(viewerRole);
   const atLimit = maxMembers !== null && memberCount + pendingCount >= maxMembers;
 
   function openUpgrade(reason: string) {
@@ -112,10 +54,7 @@ export function TeamClient({
     setUpgradeOpen(true);
   }
 
-  function handleInvite(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    formData.set("role", inviteRole);
+  function handleInvite(formData: FormData) {
     startTransition(async () => {
       const result = await inviteMemberAction(formData);
       handleActionResult(result, {
@@ -126,30 +65,14 @@ export function TeamClient({
       });
       if (result.ok) {
         setInviteOpen(false);
-        inviteFormRef.current?.reset();
-        setInviteRole("MEMBER");
+        // Remount the form so email + role start fresh (cancel keeps input).
+        setInviteFormKey((key) => key + 1);
         router.refresh();
       }
     });
   }
 
-  /** OWNER can edit anyone but themselves; ADMIN can edit MEMBER rows only. */
-  function canEditRole(row: TeamRow): boolean {
-    if (row.kind !== "member" || row.isSelf) return false;
-    if (viewerRole === "OWNER") return true;
-    if (viewerRole === "ADMIN") return row.role === "MEMBER";
-    return false;
-  }
-
-  function allowedRoles(row: TeamRow): Role[] {
-    if (viewerRole === "OWNER") return ["OWNER", "ADMIN", "MEMBER"];
-    // Admins can manage members but never grant/keep owner
-    void row;
-    return ["ADMIN", "MEMBER"];
-  }
-
-  function changeRole(row: TeamRow, role: Role) {
-    if (row.kind !== "member") return;
+  function changeRole(row: MemberRow, role: Role) {
     const formData = new FormData();
     formData.set("membershipId", row.id);
     formData.set("role", role);
@@ -180,6 +103,15 @@ export function TeamClient({
     });
   }
 
+  /** No email delivery in this app — the invite link is the delivery mechanism. */
+  function copyInviteLink(token: string) {
+    const url = `${window.location.origin}/invite/${token}`;
+    navigator.clipboard
+      .writeText(url)
+      .then(() => toast.success("Invite link copied", { description: url }))
+      .catch(() => toast.error("Could not copy — " + url));
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -188,9 +120,9 @@ export function TeamClient({
         actions={
           <Button
             onClick={() => setInviteOpen(true)}
-            disabled={pending || !canInvite}
-            title={canInvite ? undefined : "Only owners and admins can invite teammates"}
-            variant={canInvite ? "default" : "outline"}
+            disabled={pending || !inviteAllowed}
+            title={inviteAllowed ? undefined : "Only owners and admins can invite teammates"}
+            variant={inviteAllowed ? "default" : "outline"}
           >
             <MailPlus />
             Invite member
@@ -199,225 +131,34 @@ export function TeamClient({
       />
 
       {atLimit ? (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
-          <p className="font-medium">Member limit reached</p>
-          <p className="text-muted-foreground">
-            {memberCount + pendingCount} of {maxMembers} seats used on the {planLabel} plan. Upgrade to Pro for 10 seats.
-          </p>
-        </div>
+        <SeatLimitBanner memberCount={memberCount} pendingCount={pendingCount} maxMembers={maxMembers} planLabel={planLabel} />
       ) : null}
 
-      <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Member</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="hidden md:table-cell">Last sign-in</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((row) => {
-              if (row.kind === "invite") {
-                return (
-                  <TableRow key={row.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <Avatar>
-                          <AvatarFallback className="bg-muted text-muted-foreground">
-                            <UserPlus className="size-4" />
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">{row.email}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Expires {timeAgo(new Date(row.expiresAt))}
-                          </p>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <RoleBadge role={row.role} />
-                    </TableCell>
-                    <TableCell>
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
-                        <span className="size-1.5 rounded-full bg-amber-500" />
-                        Pending
-                      </span>
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell text-muted-foreground">—</TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-muted-foreground"
-                        disabled={pending || !canInvite}
-                        onClick={() => revoke(row.id)}
-                      >
-                        <X />
-                        Revoke
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              }
+      <TeamTable
+        rows={rows}
+        viewerRole={viewerRole}
+        pending={pending}
+        canInvite={inviteAllowed}
+        onRoleChange={changeRole}
+        onRemove={(row) => setRemoveTarget({ id: row.id, email: row.email })}
+        onCopyLink={copyInviteLink}
+        onRevoke={revoke}
+      />
 
-              return (
-                <TableRow key={row.id}>
-                  <TableCell>
-                    <div className="flex items-center gap-3">
-                      <Avatar>
-                        <AvatarFallback className="bg-violet-600/10 text-xs font-semibold text-violet-600 dark:text-violet-400">
-                          {initials(row.name, row.email)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
-                          {row.name ?? row.email}
-                          {row.isSelf ? <span className="ml-1.5 text-xs text-muted-foreground">(you)</span> : null}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">{row.email}</p>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    {canEditRole(row) ? (
-                      <Select
-                        value={row.role}
-                        onValueChange={(v) => {
-                          if (v) changeRole(row, v as Role);
-                        }}
-                        items={allowedRoles(row).map((r) => ({ label: r, value: r }))}
-                        disabled={pending}
-                      >
-                        <SelectTrigger size="sm" className="w-28" aria-label={`Change role for ${row.email}`}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {allowedRoles(row).map((r) => (
-                            <SelectItem key={r} value={r}>
-                              {r}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <RoleBadge role={row.role} />
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                      <span className="size-1.5 rounded-full bg-emerald-500" />
-                      Active
-                    </span>
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell text-muted-foreground">
-                    {row.lastSignInAt ? timeAgo(new Date(row.lastSignInAt)) : "Never"}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive hover:text-destructive"
-                      disabled={pending || !canInvite || row.isSelf}
-                      title={
-                        row.isSelf
-                          ? "You cannot remove yourself"
-                          : canInvite
-                            ? undefined
-                            : "Only owners and admins can remove members"
-                      }
-                      onClick={() => setRemoveTarget({ id: row.id, email: row.email })}
-                    >
-                      <UserMinus />
-                      Remove
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </div>
+      <InviteDialog
+        open={inviteOpen}
+        onOpenChange={setInviteOpen}
+        pending={pending}
+        formKey={inviteFormKey}
+        onSubmit={handleInvite}
+      />
 
-      {/* Invite dialog */}
-      <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Invite teammate</DialogTitle>
-            <DialogDescription>
-              Send an invitation to join this workspace. Seats count against your plan limit.
-            </DialogDescription>
-          </DialogHeader>
-          <form ref={inviteFormRef} onSubmit={handleInvite} className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="invite-email">Email address</Label>
-              <Input
-                id="invite-email"
-                name="email"
-                type="email"
-                placeholder="teammate@company.com"
-                autoFocus
-                required
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="invite-role">Role</Label>
-              <Select
-                value={inviteRole}
-                onValueChange={(v) => {
-                  if (v) setInviteRole(v as "ADMIN" | "MEMBER");
-                }}
-                items={[
-                  { label: "MEMBER", value: "MEMBER" },
-                  { label: "ADMIN", value: "ADMIN" },
-                ]}
-              >
-                <SelectTrigger id="invite-role" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="MEMBER">MEMBER — can view and create projects</SelectItem>
-                  <SelectItem value="ADMIN">ADMIN — can manage team and projects</SelectItem>
-                </SelectContent>
-              </Select>
-              <input type="hidden" name="role" value={inviteRole} />
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setInviteOpen(false)} disabled={pending}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={pending}>
-                {pending ? "Sending…" : "Send invitation"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Remove confirmation */}
-      <AlertDialog open={removeTarget !== null} onOpenChange={(open) => !open && setRemoveTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove member?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {removeTarget?.email} will lose access to this organization immediately.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={pending}
-              className="bg-destructive text-white hover:bg-destructive/90"
-              onClick={confirmRemove}
-            >
-              {pending ? "Removing…" : "Remove"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <RemoveMemberDialog
+        target={removeTarget}
+        pending={pending}
+        onOpenChange={(open) => !open && setRemoveTarget(null)}
+        onConfirm={confirmRemove}
+      />
 
       <UpgradeDialog open={upgradeOpen} onOpenChange={setUpgradeOpen} reason={upgradeReason} canUpgrade={canUpgrade} />
     </div>

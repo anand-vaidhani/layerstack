@@ -42,6 +42,7 @@ export default async function TeamPage() {
     id: i.id,
     email: i.email,
     role: i.role,
+    token: i.token,
     expiresAt: i.expiresAt.toISOString(),
   }));
 

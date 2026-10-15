@@ -41,6 +41,17 @@ The sign-in page has one-click demo fill buttons.
 - **RBAC** — `OWNER` / `ADMIN` / `MEMBER` enforced in the UI *and* re-checked in every server
   action (members see lock icons/disabled controls; admins can't manage owners; you can't
   demote/remove the last owner or remove yourself).
+- **Invite links** — there is no email delivery in this app, so an invitation *is* a link:
+  `/invite/<token>` (7-day expiry). Pending rows on the Team page have a **Copy link** button.
+  Opening the link shows one of: sign-in/sign-up buttons (signed out, `?next=` carries you back),
+  a "wrong account" card with a sign-out-and-switch button (the signed-in email must match the
+  invited email), the accept card, or "invitation unavailable" once expired/revoked/used.
+  Accepting creates the membership with the invited role, logs `MEMBER_JOINED`, switches the
+  active org cookie and lands you on `/dashboard`. The auth pages are invite-aware: sign-in shows
+  the invitation context with the invited email pre-filled (locked on sign-up), and signing up
+  from an invite link creates *only* the account — no personal workspace — then joins the inviting
+  org directly. There is no preset password: the invited person chooses their own on sign-up (or
+  signs in with an existing account's password).
 - **Plan gating** — FREE: 3 projects, 2 members. PRO ($29/mo): unlimited projects, 10 members.
   Hitting a limit returns `PLAN_LIMIT` and opens the polished **Upgrade to Pro** modal.
 - **Pages** — `/` landing (features + pricing), `/sign-in`, `/sign-up`, `/dashboard` (KPI cards,
@@ -50,6 +61,9 @@ The sign-in page has one-click demo fill buttons.
   `/dashboard/billing` (usage bars, plan card, Stripe Checkout/Portal, downgrade),
   `/dashboard/settings` (org profile, user profile, password). Loading skeletons for every route.
 - **Server actions + Zod** for all mutations, with toast notifications and pending states.
+- **Zero-membership guard** — an account that belongs to no organization (e.g. an invite-mode
+  signup blocked by the plan limit) is routed to `/no-workspace` with an explanation and a
+  sign-out option. It can never enter a redirect loop between the auth pages and the dashboard.
 - **Stripe** — real Checkout session, Customer Portal and `/api/stripe/webhook`
   (checkout completed → PRO, subscription deleted → FREE). Without keys, billing runs a clearly
   labelled **demo mode**: upgrades/downgrades apply instantly with no charge.

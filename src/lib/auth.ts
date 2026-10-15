@@ -91,6 +91,12 @@ export async function requireUser(): Promise<User> {
   return user;
 }
 
+/** True when the user belongs to at least one organization. */
+export async function userHasOrg(userId: string): Promise<boolean> {
+  const count = await db.organizationUser.count({ where: { userId } });
+  return count > 0;
+}
+
 export type OrgMembership = OrganizationUser & { organization: Organization };
 
 export type SessionContext = {
@@ -114,7 +120,9 @@ export async function requireOrgContext(): Promise<SessionContext> {
     orderBy: { organization: { createdAt: "asc" } },
   });
   if (memberships.length === 0) {
-    redirect("/sign-up?error=no_organization");
+    // Not /sign-in or /sign-up: signed-in users are redirected away from
+    // those pages, which would loop forever for a zero-membership account.
+    redirect("/no-workspace");
   }
   const jar = await cookies();
   const activeOrgId = jar.get(ACTIVE_ORG_COOKIE)?.value;

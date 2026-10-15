@@ -5,12 +5,22 @@ export const signInSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
-export const signUpSchema = z.object({
-  name: z.string().trim().min(2, "Name must be at least 2 characters").max(60),
-  email: z.email("Enter a valid email").toLowerCase(),
-  password: z.string().min(8, "Password must be at least 8 characters").max(100),
-  organizationName: z.string().trim().min(2, "Organization name must be at least 2 characters").max(60),
-});
+/**
+ * Sign-up is either a fresh workspace (organizationName required) or an
+ * invite acceptance (inviteToken required, no workspace created).
+ */
+export const signUpSchema = z
+  .object({
+    name: z.string().trim().min(2, "Name must be at least 2 characters").max(60),
+    email: z.email("Enter a valid email").toLowerCase(),
+    password: z.string().min(8, "Password must be at least 8 characters").max(100),
+    organizationName: z.string().trim().max(60).optional(),
+    inviteToken: z.string().trim().min(1).optional(),
+  })
+  .refine((d) => Boolean(d.inviteToken) || (d.organizationName?.length ?? 0) >= 2, {
+    message: "Organization name must be at least 2 characters",
+    path: ["organizationName"],
+  });
 
 export const createProjectSchema = z.object({
   title: z.string().trim().min(2, "Project title must be at least 2 characters").max(80),

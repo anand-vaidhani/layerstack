@@ -1,0 +1,103 @@
+// Database blueprint for the B2B Multi-Tenant SaaS Dashboard.
+// Based on ai_prompt_requirements_checklist.md, plus Invitation/Activity
+// models needed for the invite flow and dashboard activity feed.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum SubscriptionPlan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+model Organization {
+  id               String           @id @default(uuid())
+  name             String
+  slug             String           @unique
+  stripeCustomerId String?          @unique
+  stripeSubId      String?          @unique
+  plan             SubscriptionPlan @default(FREE)
+  users            OrganizationUser[]
+  projects         Project[]
+  invitations      Invitation[]
+  activities       Activity[]
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+}
+
+model User {
+  id            String             @id @default(uuid())
+  email         String             @unique
+  name          String?
+  passwordHash  String?
+  lastSignInAt  DateTime?
+  organizations OrganizationUser[]
+  activities    Activity[]
+  createdAt     DateTime           @default(now())
+}
+
+model OrganizationUser {
+  id             String       @id @default(uuid())
+  role           Role         @default(MEMBER)
+  userId         String
+  organizationId String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model Project {
+  id             String       @id @default(uuid())
+  title          String
+  status         String       @default("Active")
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, createdAt])
+}
+
+// Pending team invitations (no email delivery in dev — shown as "Pending" in the team table)
+model Invitation {
+  id             String       @id @default(uuid())
+  email          String
+  role           Role         @default(MEMBER)
+  organizationId String
+  invitedById    String?
+  token          String       @unique @default(uuid())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+  expiresAt      DateTime
+
+  @@index([organizationId])
+}
+
+// Audit-style feed powering the dashboard Activity Feed
+model Activity {
+  id             String       @id @default(uuid())
+  organizationId String
+  actorId        String?
+  type           String
+  message        String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor          User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, createdAt])
+}
